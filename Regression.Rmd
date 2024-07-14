@@ -1,0 +1,340 @@
+---
+title: "Personalized Movie Recommendations"
+author: "N. Sivakami_2327733"
+date: "2024-07-14"
+output:
+  word_document: default
+  pdf_document: default
+  html_document:
+    df_print: paged
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+## Business Understanding
+
+### Problem Statement:
+In the era of digital streaming platforms, providing personalized movie recommendations has become crucial to enhance user experience and satisfaction. The objective of this project is to build a regression model that predicts movie ratings for users based on their age group and preferred genres. By using these predictions, we can recommend movies that are expected to have higher ratings for each user, thereby increasing user engagement and satisfaction.
+
+### Objectives:
+
+- Develop a regression model to predict movie ratings based on user age group and genres.
+- Identify the best-performing model among Linear Regression, Ridge Regression, and Lasso Regression.
+- Use the chosen model to recommend movies with higher predicted ratings for individual users.
+- Visualize the impact of age and genre on movie ratings to provide insights for personalized recommendations.
+
+## Data Understanding
+
+### Data Collection:
+The datasets used in this project include:
+
+##### moviess.csv: Contains movie information.
+##### ratingss.csv: Contains user ratings for movies.
+##### userss.csv: Contains user demographic information.
+
+### Data Exploration:
+Initial exploration involves understanding the structure and content of each dataset.
+
+```{r}
+# Load necessary libraries
+library(dplyr)
+library(corrplot)
+library(caret)
+library(dplyr)
+library(ggplot2)
+library(corrplot)
+library(DataExplorer)
+library(readr)
+library(tidyr)
+library(glmnet)
+
+# Load datasets
+movies_df <- read_csv('/Users/SivakamiPillai/Documents/CU/MLR/moviess.csv')
+spec(movies_df)
+ratings_df <- read_csv('/Users/SivakamiPillai/Documents/CU/MLR/ratingss.csv')
+spec(ratings_df)
+users_df <- read_csv('/Users/SivakamiPillai/Documents/CU/MLR/userss.csv')
+spec(users_df)
+
+# Display the structure of each dataset
+str(movies_df)
+str(ratings_df)
+str(users_df)
+
+# Display the first few rows of each dataset
+head(movies_df)
+head(ratings_df)
+head(users_df)
+
+# Check column names of each dataset
+colnames(movies_df)
+colnames(ratings_df)
+colnames(users_df)
+```
+
+### Data Dictionary:
+
+**movies_df:**
+
+movie_id: Unique identifier for each movie
+title:Title of the movie
+genres: Genres of the movie (separated by '|')
+
+**ratings_df:**
+
+user_id: Unique identifier for each user
+movie_id: Unique identifier for each movie
+rating: User rating for the movie
+timestamp: Timestamp of the rating
+users_df:
+
+user_id: Unique identifier for each user
+gender: Gender of the user
+age: Age of the user
+occupation: Occupation of the user
+zipcode: Zipcode of the user
+Assessing Data Quality:
+Assess data quality by checking for missing values and unique values in each column.
+
+
+## Data Preparation
+
+#### Data Integration:
+Merge the three datasets to create a single comprehensive dataset.
+
+```{r}
+# Merge datasets
+merged_df <- ratings_df %>%
+  inner_join(movies_df, by = 'movie_id') %>%
+  inner_join(users_df, by = 'user_id')
+```
+
+## Data Cleaning:
+Handle missing values, normalize age, create age groups, and one-hot encode genres and age groups.
+
+```{r}
+plot_missing(merged_df)
+```
+**Interpretation:** No missing values were found in the dataset. Hence, we proceed with the data normalization process. With this code we prepare the data for regression modeling by normalizing age, creating age groups, and one-hot encoding categorical variables (genres and age groups). We are ensuring that the final dataset contains only useful columns and is ready for building regression models.
+
+```{r}
+# Normalize age and create age groups
+merged_df <- merged_df %>%
+  mutate(age = scale(age)) %>%
+  mutate(age_group = cut(age, breaks = c(-Inf, 18, 25, 35, 45, 55, 65, Inf), labels = c("Under 18", "18-24", "25-34", "35-44", "45-54", "55-64", "65+")))
+
+# One-hot encode genres and age_group
+dummies_age <- dummyVars(" ~ age_group", data = merged_df)
+one_hot_encoded_age <- predict(dummies_age, newdata = merged_df)
+
+# Combine one-hot encoded columns with the original dataframe
+merged_df <- merged_df %>%
+  select(-age_group) %>%
+  bind_cols(one_hot_encoded_age) %>%
+  mutate(age_group = cut(age, breaks = c(-Inf, 18, 25, 35, 45, 55, 65, Inf), labels = c("Under 18", "18-24", "25-34", "35-44", "45-54", "55-64", "65+")))
+
+# Final dataframe preparation
+final_df <- merged_df %>%
+  select(rating, age, starts_with("Action"), starts_with("Drama"), starts_with("Comedy"), 
+         starts_with("Thriller"), starts_with("Romance"), starts_with("Adventure"), starts_with("Animation"), 
+         starts_with("Children"), starts_with("Crime"), starts_with("Documentary"), starts_with("Fantasy"),
+         starts_with("Horror"), starts_with("Musical"), starts_with("Mystery"), starts_with("Sci-Fi"),
+         starts_with("War"), starts_with("Western"), starts_with("age_group"))
+
+# Remove columns with only one unique value
+final_df <- final_df[, sapply(final_df, function(col) length(unique(col)) > 1)]
+
+```
+
+## Data Exploration and Visualization:
+
+```{r}
+# Distribution of Ratings Across Age Groups
+ggplot(merged_df, aes(x = age_group, y = rating, fill = age_group)) +
+  geom_boxplot() +
+  theme_minimal() +
+  labs(title = "Distribution of Ratings Across Age Groups", x = "Age Group", y = "Rating")
+
+# Melt the dataframe for genres
+genres_df <- merged_df %>%
+  select(starts_with("Action"), starts_with("Drama"), starts_with("Comedy"), starts_with("Thriller"), starts_with("Romance"), 
+         starts_with("Adventure"), starts_with("Animation"), starts_with("Children"), starts_with("Crime"), 
+         starts_with("Documentary"), starts_with("Fantasy"), starts_with("Horror"), starts_with("Musical"), 
+         starts_with("Mystery"), starts_with("Sci-Fi"), starts_with("War"), starts_with("Western"), rating)
+
+str(genres_df)
+
+genres_melt <- genres_df %>%
+  filter(rating == 1) %>%  # Filter for rating of 1 in the "rating" column
+  gather(key = "genre", value = "value", -rating) %>%
+  summarize(avg_rating = mean(rating))
+
+# Plot ratings for each genre
+a_rating <- mean(merged_df$rating)
+genress <- merged_df$genres
+ggplot(genres_df, aes(x = genress, a_rating, y = a_rating, fill = genress)) + geom_bar(stat = "identity") +
+  theme_minimal() +
+  coord_flip() +
+  labs(title = "Ratings for Each Genre", x = "Genre", y = "Rating")
+
+```
+
+#### **Interpretation:**
+
+#### **Bar Chart**
+
+- This bar chart shows the average ratings for each genre.
+- Comedy, Action and drama genres have the highest average ratings, suggesting these genres are generally well-received by audiences.
+-War and Fantasy genres have lower average ratings, which might indicate that they are less popular or more niche.
+- This insight can be used to prioritize the recommendation of higher-rated genres to users, potentially enhancing user satisfaction.
+
+#### **Box plot**
+
+- The boxplot illustrates the distribution of ratings within different age groups.
+- The Under 18 age group shows a wide range of ratings, indicating diverse preferences within this group.
+- The median rating for the "Under 18" group is around 4, which suggests that younger audiences generally rate movies favorably.
+- There are outliers present, which indicate some movies receive exceptionally low ratings from this age group.
+- This variability can be used to tailor recommendations more closely to the specific preferences of younger users.
+
+
+## **Modeling**
+
+**Model Selection** - Here, we are taking three models for predictions.
+
+- Multiple Linear Regression
+- Ridge Regression
+- Lasso Regression
+
+**Model Output:**
+
+```{r}
+# Train-test split with 70% for training and 30% for testing
+set.seed(567)
+train_index <- createDataPartition(final_df$rating, p = 0.7, list = FALSE)
+train_df <- final_df[train_index, ]
+test_df <- final_df[-train_index, ]
+
+# Ensure consistent column names between training and testing sets
+x_train <- model.matrix(rating ~ ., train_df)[,-1]
+y_train <- train_df$rating
+x_test <- model.matrix(rating ~ ., test_df)[,-1]
+y_test <- test_df$rating
+
+# Check column consistency
+if (!all(colnames(x_train) == colnames(x_test))) {
+  stop("Mismatch in column names between training and testing data")
+}
+```
+
+**Model 1: Linear Regression.** Here we are performing Multiple Linear Regression which involves multiple predictor variables and a single response variable.
+
+### **Y = b0 + b1X1 + b1 + b2X2 + ... + bpXp**
+ 
+In this, The response variable (Y) is rating.
+The predictor variables(X) include age, one-hot encoded genres (e.g., Action, Drama, Comedy, etc.), and one-hot encoded age groups, etc.
+
+```{r}
+# Fit the linear regression model
+lm_model <- lm(rating ~ ., data = train_df)
+summary(lm_model)
+```
+
+**Evalutation of Model 1:**
+
+```{r}
+# Predict and evaluate on test data
+lm_predictions <- predict(lm_model, newdata = test_df)
+lm_rmse <- RMSE(lm_predictions, y_test)
+lm_r2 <- R2(lm_predictions, y_test)
+print(paste("Linear Regression RMSE:", lm_rmse))
+print(paste("Linear Regression R-squared:", lm_r2))
+```
+
+**Model 2: Ridge Regression Model**. Here, we are using Ridge regression model to achieve a better balance between bias and variance, potentially leading to improved predictive performance compared to ordinary least squares (OLS) regression when the data has high multicollinearity or the number of predictors is large.
+
+```{r}
+X <- model.matrix(rating ~ ., - 1, data = final_df)
+Y <- final_df$rating
+
+# Define the lambda sequence
+lambda <- 10^seq(10, -2, length = 100)
+print(lambda)
+
+# Split the data into training and validation sets
+set.seed(567)
+part <- sample(2, nrow(X), replace = TRUE, prob = c(0.7, 0.3))
+X_train <- X[part == 1, ]
+X_cv <- X[part == 2, ]
+Y_train <- Y[part == 1]
+Y_cv <- Y[part == 2]
+
+# Perform Ridge regression
+ridge_reg <- glmnet(X_train, Y_train, alpha = 0, lambda = lambda)
+summary(ridge_reg)
+
+# Find the best lambda for Ridge regression using cross-validation
+ridge_cv <- cv.glmnet(X_train, Y_train, alpha = 0, lambda = lambda)
+best_lambda_ridge <- ridge_cv$lambda.min
+ridge_final <- glmnet(X_train, Y_train, alpha = 0, lambda = best_lambda_ridge)
+
+```
+
+**Evaluation of Model 2:**
+```{r}
+
+# Predict and evaluate Ridge regression on validation data
+ridge_predictions <- predict(ridge_final, s = best_lambda_ridge, newx = X_cv)
+ridge_rmse <- sqrt(mean((ridge_predictions - Y_cv)^2))
+ridge_r2 <- cor(ridge_predictions, Y_cv)^2
+print(paste("Ridge Regression RMSE:", ridge_rmse))
+print(paste("Ridge Regression R-squared:", ridge_r2))
+```
+
+**Model 3: Lasso regression (Least Absolute Shrinkage and Selection Operator).** The Lasso model adds a penalty term that is the sum of the absolute values of the coefficients multiplied by a tuning parameter (lambda). This penalty can shrink some coefficients to exactly zero, effectively performing feature selection. This means lasso regression can simplify the model by retaining only the most important predictors.
+
+```{r}
+# Perform Lasso regression
+lasso_reg <- glmnet(X_train, Y_train, alpha = 1, lambda = lambda)
+summary(lasso_reg)
+
+# Find the best lambda for Lasso regression using cross-validation
+lasso_cv <- cv.glmnet(X_train, Y_train, alpha = 1, lambda = lambda)
+best_lambda_lasso <- lasso_cv$lambda.min
+lasso_final <- glmnet(X_train, Y_train, alpha = 1, lambda = best_lambda_lasso)
+
+```
+
+**Evaluation of Model 3:**
+
+```{r}
+lasso_predictions <- predict(lasso_final, s = best_lambda_lasso, newx = X_cv)
+lasso_rmse <- sqrt(mean((lasso_predictions - Y_cv)^2))
+lasso_r2 <- cor(lasso_predictions, Y_cv)^2
+print(paste("Lasso Regression RMSE:", lasso_rmse))
+print(paste("Lasso Regression R-squared:", lasso_r2))
+```
+
+ **Results after Deployment of the models:**
+
+```{r}
+# Compare RMSE and R-squared values
+results <- data.frame(
+  Model = c("Linear Regression", "Ridge Regression", "Lasso Regression"),
+  RMSE = c(lm_rmse, ridge_rmse, lasso_rmse),
+  R2 = c(lm_r2, ridge_r2, lasso_r2)
+)
+print(results)
+
+# Recommend the best model based on RMSE and R-squared
+best_model <- results[which.min(results$RMSE), ]
+print(paste("Best Model:", best_model$Model))
+print(paste("Best Model RMSE:", best_model$RMSE))
+print(paste("Best Model R-squared:", best_model$R2))
+```
+
+## Inference:
+
+It shows that the best model for this business problem is the **Multiple Linear Regression** model with **Root Mean Square Error(RMSE) 1.11491516649151 and R-squared 0.003376252965060167**.This model can be effectively used to provide personalized movie recommendations to users.Thus, by deploying the multiple linear regression model kind of a recommendation system, streaming platforms can enhance user satisfaction by providing tailored movie suggestions, ultimately leading to increased user engagement and retention.
+
+
